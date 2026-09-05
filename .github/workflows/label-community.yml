@@ -1,0 +1,83 @@
+# **what?**
+# Will label a newly opened PR or issue as a community contribution
+#
+# **why?**
+# To make triaging easier and faster
+
+# **when?**
+# This will run when called by another workflow
+
+## Important: Your repository will need to be added to the included repositories for IT_TEAM_MEMBERSHIP
+
+name: Label Community Contribution
+
+on:
+  workflow_call:
+    inputs:
+      github_team:
+        description: The team to exclude
+        type: string
+        required: true
+        default: 'core-group'
+      label:
+        description: The label to add
+        type: string
+        required: true
+        default: 'community'
+    secrets:
+      IT_TEAM_MEMBERSHIP:
+        description: "Token that can view org level teams"
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  pull-requests: write # labels PRs
+  issues: write # labels issues
+  contents: read # reads the team membership file
+
+jobs:
+  determine-team-membership:
+    name: "Determine team membership"
+    uses: dbt-labs/actions/.github/workflows/determine-team-membership.yml@ed19ee39fd410f9ebc3ef202a8c80879a3328697 # main
+    with:
+      github_team: ${{ inputs.github_team }}
+
+    secrets:
+      IT_TEAM_MEMBERSHIP: ${{ secrets.IT_TEAM_MEMBERSHIP }}
+
+  community_label:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    needs: [determine-team-membership]
+
+    steps:
+      - name: "View ${{ inputs.github_team}} Membership"
+        run: |
+          echo ${{ inputs.github_team}} membership: ${{ needs.determine-team-membership.outputs.membership_list }}
+      
+      - name: "Determine if Community Contribution"
+        id: community
+        run: |
+          AUTHOR="${{ github.event.pull_request.user.login || github.event.issue.user.login }}"
+          if [[ " ${{ needs.determine-team-membership.outputs.membership_list }} " =~ " ${AUTHOR} " ]]; then
+              echo "Author is in the list."
+              echo "category=internal" >> $GITHUB_OUTPUT
+          else
+              echo "Author is not in the list."
+              echo "category=external" >> $GITHUB_OUTPUT
+          fi
+
+      - name: "Add ${{ inputs.label }} label"
+        if: ${{ steps.community.outputs.category == 'external' }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # actions/github-script@v8
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ["${{ inputs.label }}"]
+            })

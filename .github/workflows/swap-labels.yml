@@ -1,0 +1,62 @@
+# **what?**
+# Will remove one label in favor of another
+#
+# **why?**
+# When we triage issues, we sometimes need more information from the issue creator.  In
+# those cases we remove the `triage` label and add the `awaiting_response` label.  Once we
+# receive a response in the form of a comment, we want the `awaiting_response` label removed
+# in favor of the `triage` label so we are aware that the issue needs action.
+
+# **when?**
+# This will run when called by another workflow
+
+name: Swap Issue Labels
+
+on:
+  workflow_call:
+    inputs:
+      add_label:
+        description: The label to add
+        type: string
+        required: true
+      remove_label:
+        description: The label to remove
+        type: string
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  issues: write
+
+jobs:
+  triage_label:
+    timeout-minutes: 20
+    # only swap the labels if the label to remove exists
+    if: contains(github.event.issue.labels.*.name, inputs.remove_label)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: "Add ${{ inputs.add_label }} label"
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # actions/github-script@v8
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ["${{ inputs.add_label }}"]
+            })
+
+      - name: "Remove ${{ inputs.remove_label }} label"
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # actions/github-script@v8
+        with:
+          script: |
+            github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: "${{ inputs.remove_label }}"
+            })

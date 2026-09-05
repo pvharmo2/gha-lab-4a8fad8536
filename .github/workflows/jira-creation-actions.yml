@@ -1,0 +1,36 @@
+# **what?**
+# Mirrors issues into Jira. Includes the information: title,
+# GitHub Issue ID and URL
+
+# **why?**
+# Jira is our tool for tracking and we need to see these issues in there
+
+# **when?**
+# On issue creation or when an issue is labeled `Jira`
+
+name: Jira Issue Creation
+
+on:
+  issues:
+    types: [opened, labeled]
+  workflow_call:
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+permissions:
+  issues: write
+
+jobs:
+  call-creation-action:
+    uses: dbt-labs/actions/.github/workflows/jira-creation.yml@ed19ee39fd410f9ebc3ef202a8c80879a3328697 # main
+    with:
+      project_key: "CT"
+    secrets:
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

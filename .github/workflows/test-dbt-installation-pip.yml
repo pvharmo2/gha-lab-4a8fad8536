@@ -1,0 +1,92 @@
+# **what?**
+# This workflow installs the latest version of dbt adapter from PyPI.
+# It then runs 'dbt --version' to verify the installation was successful.
+# If it fails for the scheduled runs, it will post to our team alerts channel.
+
+# **why?**
+# This is a simple way to test all adapter installations at a single
+# time. It allows us to test them on a schedule as well to check for
+# any breaking dependency changes that might happen and alert us on it.
+
+# **when?**
+# This reusable workflow can be called or started manually
+# by specifying the package name
+
+name: dbt Installation - pip Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "Package name to test (i.e. dbt-postgres)"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      package_name:
+        required: true
+        type: string
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: Slack app webhook url
+        required: true
+
+permissions:
+  contents: read # required for slack-post-notification workflow
+
+env:
+  ARTIFACT_BASENAME: "pip-installation-test"
+  ARTIFACT_RETENTION_DAYS: 1
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pip-installation-test:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10"]
+
+    steps:
+      - name: "Set up Python - ${{ matrix.python-version }}"
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # actions/setup-python@v5
+        with:
+          python-version: "${{ matrix.python-version }}"
+
+      - name: "Update Python Packages"
+        run: python -m pip install --user --upgrade pip
+
+      - name: "[DEBUG] Show Package Installer Python Version"
+        run: python -m pip --version
+
+      - name: "Install Package - ${{ inputs.package_name }}"
+        run: python -m pip install pip ${{ inputs.package_name }}
+
+      - name: "[DEBUG] Show Installed Packages"
+        run: python -m pip list
+
+      - name: "[DEBUG] Show Package Info - ${{ inputs.package_name }}"
+        run: python -m pip show ${{ inputs.package_name }}
+
+      - name: "Verify ${{ inputs.package_name }} Version"
+        id: installation-test
+        run: |
+          if [[ ${{ inputs.package_name }} == "dbt-core" ]]
+          then
+            dbt --version
+          else
+            PACKAGE=$(echo ${{ inputs.package_name }} | cut -c 5-)
+            python -c "import dbt.adapters.$PACKAGE"
+          fi
+
+      - name: "[INFO] pip installation test failure"
+        if: ${{ always() && steps.installation-test.outcome != 'success' }}
+        uses: ./.github/actions/test-dbt-installation-notification
+        with:
+          method: "pip"
+          scenario: ${{ inputs.package_name }} on Python ${{ matrix.python-version }}

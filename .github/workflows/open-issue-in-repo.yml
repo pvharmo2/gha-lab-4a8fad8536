@@ -1,0 +1,123 @@
+# **what?**
+# Open an issue in a specified repository with a specified title and body.  If the issue already exists, do nothing.
+
+# **why?**
+# To be able to trigger issues to open in other repositories from a workflow in a different repository.
+
+# **when?**
+# This will be triggered from another workflow on an issue or PR.
+# The calling workflow determines what trigger to use.
+
+
+name: Open Issue in Another Repository
+
+on:
+  workflow_call:
+    inputs:
+      issue_repository:
+        description: 'Repository to open the issue in'
+        required: true
+        type: string
+      issue_title:
+        description: 'Title of the issue'
+        required: true
+        type: string
+      issue_body:
+        description: 'The body of the issue'
+        required: true
+        type: string
+    secrets:
+      FISHTOWN_BOT_PAT:
+        description: 'PAT to use for authentication'
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  issues: write # opens new issues
+
+jobs:
+  prep:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    outputs:
+      exists: ${{ steps.comment_check.outputs.exists }}
+      issue_number: ${{ steps.issue_values.outputs.issue_number }}
+
+    steps:
+
+      - name: "[DEBUG] Print variables"
+        id: print_variables
+        run: |
+          echo "inputs.issue_repository:      ${{ inputs.issue_repository }}"
+          echo "inputs.issue_title:           ${{ inputs.issue_title}}"
+          echo "inputs.issue_body:            ${{ inputs.issue_body }}"
+
+      # Even though GitHub treats issues and PRs as the same thing behind the scenes, the event context accesses
+      # them in different ways.  Choose an issue number of PR number.  Only 1 will be filled.
+      - name: "Determine Issue or PR Values"
+        id: issue_values
+        run: |
+          echo "issue_number=${{ github.event.pull_request.number || github.event.issue.number }}" >> $GITHUB_OUTPUT
+      
+      - name: "Check for comment"
+        uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e  # peter-evans/find-comment@v3
+        id: issue_comment
+        with:
+          issue-number: ${{ steps.issue_values.outputs.issue_number }}
+          body-includes: "Opened a new issue in ${{ inputs.issue_repository }}:"
+          token: ${{ secrets.FISHTOWN_BOT_PAT }}
+
+      - name: "Set if comment already exists"
+        id: comment_check
+        run: |
+          if [ '${{ steps.issue_comment.outputs.comment-body }}' = '' ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+            title="Continue Processing."
+            message="Opening a new issue in ${{ inputs.issue_repository }}."
+          else
+            echo "exists=true" >> $GITHUB_OUTPUT
+            title="Stop processing."
+            message="Comment already exists for this issue or PR indicating an associated issue. New issue will not be opened."
+          fi
+          echo "::notice $title::$message"
+
+  open_new_issue:
+    timeout-minutes: 20
+    needs: [prep]
+    if: ${{ needs.prep.outputs.exists == 'false' }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: "Check out ${{ github.repository }}"
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          token: ${{ secrets.FISHTOWN_BOT_PAT }}
+
+      - name: "Open Issue in ${{ inputs.issue_repository }}"
+        id: open_issue
+        run: |
+          issue=$(gh issue create --repo ${{ inputs.issue_repository }} \
+            --title "${{ inputs.issue_title }}" \
+            --body "${{ inputs.issue_body }}")
+          echo "issue_url=$issue" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.FISHTOWN_BOT_PAT }}
+
+      - name: "Set Issue Comment"
+        id: set_issue_comment
+        run: |
+          issue_comment="Opened a new issue in ${{ inputs.issue_repository }}: ${{ steps.open_issue.outputs.issue_url }}"
+          echo "issue_comment=$issue_comment" >> $GITHUB_OUTPUT
+
+      - name: "Leave Comment Linking to Opened Issue"
+        id: issue_comment
+        run: |
+          gh issue comment --repo ${{ github.repository }} \
+            ${{ needs.prep.outputs.issue_number }} \
+            --body "${{ steps.set_issue_comment.outputs.issue_comment }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.FISHTOWN_BOT_PAT }}

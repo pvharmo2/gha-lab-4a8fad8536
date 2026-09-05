@@ -1,0 +1,129 @@
+name: "Run pre-commit autoupdate"
+
+on:
+  workflow_call:
+    secrets:
+      TOKEN:
+        description: "Your token"
+        required: true
+      SLACK_WEBHOOK_PR_URL:
+        description: "The Slack webhook for the PR notification"
+        required: false
+      SLACK_WEBHOOK_ALERT_URL:
+        description: "The Slack webhook for a failure notification"
+        required: false
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  precommit-autoupdate:
+    timeout-minutes: 20
+    name: "pre-commit autoupdate"
+    runs-on: ubuntu-24.04
+    outputs:
+      pull-request-url: ${{ steps.pull-request.outputs.url }}
+    steps:
+      - name: "Check out repository"
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # actions/checkout@v4
+
+      - name: "Create a new branch"
+        id: branch
+        run: |
+          branch=pre-commit/$(date +'%Y-%m-%dT%H_%M_%S')
+          git checkout -b $branch
+          echo "name=$branch" >> $GITHUB_OUTPUT
+
+      - name: "Add brew to the PATH"
+        run: echo "/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin" >> $GITHUB_PATH
+
+      - name: "Install pre-commit"
+        run: brew install pre-commit
+
+      - name: "Check for pre-commit hook updates"
+        id: pre-commit
+        run: |
+          pre-commit autoupdate
+          updates=$(git diff --raw)
+          echo "updates=$updates" >> $GITHUB_OUTPUT
+
+      - name: "Commit local changes"
+        if: ${{ steps.pre-commit.outputs.updates }}
+        run: |
+          git config user.name "$USER"
+          git config user.email "$EMAIL"
+          git status
+          git add .
+          git commit -m "$MESSAGE"
+        env:
+          USER: "Github Build Bot"
+          EMAIL: "buildbot@fishtownanalytics.com"
+          MESSAGE: "[automated] update pre-commit hooks"
+
+      - name: "Open pull request"
+        if: ${{ steps.pre-commit.outputs.updates }}
+        id: pull-request
+        run: |
+          git push --set-upstream origin $HEAD
+          url=$(gh pr create --base $TARGET --head $HEAD --title "$TITLE" --body "$BODY")
+          echo "url=$url" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.TOKEN }}
+          TITLE: "[Automated] Update pre-commit hooks"
+          BODY: "Pre-commit hooks have updates that require resolution."
+          HEAD: ${{ steps.branch.outputs.name }}
+          TARGET: "main"
+
+  notify-success:
+    timeout-minutes: 20
+    name: "Notify success"
+    needs: precommit-autoupdate
+    if: ${{ needs.precommit-autoupdate.outputs.pull-request-url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: "[INFO] Pull request opened"
+        run: echo "::notice title=$TITLE::$MESSAGE"
+        env:
+          TITLE: "Pull request opened"
+          MESSAGE: "PR opened at ${{ needs.precommit-autoupdate.outputs.pull-request-url }}"
+
+      - name: "[Slack] Pull request opened"
+        if: ${{ secrets.SLACK_WEBHOOK_PR_URL }}
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        with:
+          status: "success"
+          notify_when: "success"
+          token: ${{ secrets.TOKEN }}
+          notification_title: ":review: [Automated] Update pre-commit hooks for ${{ github.repository }}"
+          footer: "<${{ needs.precommit-autoupdate.outputs.pull-request-url }}|View PR>"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_PR_URL }}
+
+  notify-failure:
+    timeout-minutes: 20
+    name: "Notify failure"
+    needs: precommit-autoupdate
+    if: ${{ failure() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: "[ERROR] Workflow failure"
+        run: echo "::error title=$TITLE::$MESSAGE"
+        env:
+          TITLE: "Workflow failure"
+          MESSAGE: "Update pre-commit hooks failed for ${{ github.repository }}"
+
+      - name: "[Slack] Workflow failure"
+        if: ${{ secrets.SLACK_WEBHOOK_ALERT_URL }}
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        with:
+          status: "failure"
+          notify_when: "failure"
+          token: ${{ secrets.TOKEN }}
+          notification_title: ":X: Update pre-commit hooks failed for ${{ github.repository }}"
+          footer: "<{run_url}|View Run>"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_ALERT_URL }}

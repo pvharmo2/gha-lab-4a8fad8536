@@ -1,0 +1,253 @@
+# **what?**
+# The purpose of this workflow is to trigger CI to run for each
+# release branch and main branch in a reusable format. If the CI workflow
+# fails for a branch, it will post to dev-core-alerts to raise awareness.
+
+# **why?**
+# Ensures release branches and main are always shippable and not broken.
+# Also, can catch any dependencies shifting beneath us that might
+# introduce breaking changes (could also impact Cloud).
+
+# **when?**
+# Mainly on a schedule of 9:00, 13:00, 18:00 UTC everyday.
+# Manual trigger can also test on demand
+
+name: Release branch scheduled testing
+
+on:
+  workflow_call:
+    inputs:
+      workflows_to_run:
+        description: 'A list of workflow(s) to run against ex: ["main.yml, "integration.yml"]'
+        required: true
+        type: string
+      include_main:
+        description: 'Include main when running release branch tests'
+        type: boolean
+        default: true
+      dry_run:
+        description: 'Dry run mode - select branches but do not kick off CI workflows'
+        type: boolean
+        default: false
+      branch_override:
+        description: 'A list of branches to test. If provided, will override the release branches filtering'
+        type: string
+        default: ''
+
+# no special access is needed
+permissions: read-all
+
+jobs:
+  prep-work:
+    timeout-minutes: 20
+    name: "Audit Inputs"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: "[DEBUG] Print Inputs"
+        run: |
+          echo "workflows_to_run:    ${{ inputs.workflows_to_run }}"
+          echo "dry_run:             ${{ inputs.dry_run }}"
+          echo "branch_override:     ${{ inputs.branch_override }}"
+          echo "include_main:        ${{ inputs.include_main }}"
+
+  fetch-latest-branches:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+
+    outputs:
+      branches_to_test: ${{ steps.verify-overrides.outputs.filtered-branches || steps.filter-branches.outputs.filtered-branches }}
+
+    steps:
+      - name: "Fetch ${{ github.event.repository.name }} Latest Branches"
+        uses: dbt-labs/actions/fetch-repo-branches@9e1a22a37a57f9e5e388fd47e275d71ee79a41f4 # v1
+        id: get-latest-branches
+        with:
+          repo_name: ${{ github.event.repository.name }}
+          organization: "dbt-labs"
+          pat: ${{ secrets.GITHUB_TOKEN }}
+          fetch_protected_branches_only: true
+          regex: '^(1.(?:[7,9]|[123]\d)+|[2-9].[0-9]+).latest$' # exclude branches 1.6.latest and below
+          perform_match_method: "match"
+          retries: 3
+
+      - name: "Use branch overrides"
+        id: verify-overrides
+        if: ${{ inputs.branch_override != '' }}
+        env:
+          BRANCH_OVERRIDE: ${{ inputs.branch_override }}
+        run: |
+          # Convert Python list syntax to JSON (single quotes to double quotes)
+          override_json=$(echo "$BRANCH_OVERRIDE" | sed "s/'/\"/g")
+          echo "filtered-branches=$override_json" >> $GITHUB_OUTPUT
+
+      - name: "Filter to 1.7.latest + last 2 + main"
+        id: filter-branches
+        if: ${{ inputs.branch_override == '' }}
+        env:
+          BRANCHES: ${{ steps.get-latest-branches.outputs.repo-branches }}
+          INCLUDE_MAIN: ${{ inputs.include_main }}
+        run: |
+          # Convert Python list syntax to JSON (single quotes to double quotes)
+          branches_json=$(echo "$BRANCHES" | sed "s/'/\"/g")
+          
+          # Parse input branches and extract last 2 versions
+          last_two=$(echo "$branches_json" | jq -r '.[]' | \
+            grep -E '^[0-9]+\.[0-9]+\.latest$' | \
+            sort -t. -k1,1n -k2,2n | tail -2)
+          
+          # Build final branch list: baseline + last 2 + optionally main
+          branches=("1.7.latest" $last_two)
+          if [ "$INCLUDE_MAIN" = "true" ]; then
+            branches+=("main")
+          fi
+          
+          # Convert to JSON array
+          json=$(printf '%s\n' "${branches[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "filtered-branches=$json" >> $GITHUB_OUTPUT
+
+      - name: "[ANNOTATION] ${{ github.event.repository.name }} - branches to test"
+        run: |
+          title="${{ github.event.repository.name }} - branches to test"
+          
+          if [ "${{ inputs.branch_override }}" != "" ]; then
+            branches="${{ steps.verify-overrides.outputs.filtered-branches }}"
+            message="The workflow will run tests in ${{ inputs.workflows_to_run }} for the following OVERRIDE branches of the ${{ github.event.repository.name }} repo: $branches"
+          else
+            branches="${{ steps.filter-branches.outputs.filtered-branches }}"
+            message="The workflow will run tests in ${{ inputs.workflows_to_run }} for the following branches of the ${{ github.event.repository.name }} repo: $branches"
+          fi
+          
+          if [ "${{ inputs.dry_run }}" == "true" ]; then
+            message="[DRY RUN] $message (CI will not be triggered)"
+          fi
+          echo "::notice $title::$message"
+
+  publish_failure_events:
+    timeout-minutes: 20
+    # this runs here just for the previous job.  The next job sends one alert per matrix run.
+    name: "Publish Failure Slack Message"
+    if: ${{ always() && needs.fetch-latest-branches.result != 'success' }}
+
+    needs: [fetch-latest-branches]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post failure to core Slack
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        if: ${{ github.event.repository.name == 'dbt-core' || github.event.repository.name == 'dbt-common'}}
+        with:
+          status: "failure"
+          notification_title: '${{ github.event.repository.name }} release branch scheduled testing not successful'
+          message_format: ':x: Job setup failed'
+          footer: "<{run_url}|View Run>"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_CORE_ALERTS }}
+
+      - name: Post failure to adapter Slack
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        if: ${{ github.event.repository.name != 'dbt-core' }}
+        with:
+          status: "failure"
+          notification_title: '${{ github.event.repository.name }} release branch scheduled testing not successful'
+          message_format: ':x: Job setup failed'
+          footer: "<{run_url}|View Run>"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_ADAPTER_ALERTS }}
+  
+  kick-off-ci:
+    timeout-minutes: 20
+    needs: [fetch-latest-branches]
+    if: ${{ !inputs.dry_run }}
+    name: Kick-off CI
+    runs-on: ubuntu-24.04
+
+    strategy:
+      # must run CI 1 branch at a time b/c the workflow-dispatch polls for
+      # latest run for results and it gets confused when we kick off multiple runs
+      # at once. There is a race condition so we will just run in sequential order.
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        workflow_name: ${{ fromJson(inputs.workflows_to_run) }}
+        branch: ${{ fromJSON(needs.fetch-latest-branches.outputs.branches_to_test) }}
+
+    steps:
+      - name: "[DEBUG] Print Inputs"
+        run: |
+          echo "matrix.branch:           ${{ matrix.branch }}"
+          echo "matrix.workflow_name:    ${{ matrix.workflow_name }}"
+
+      - name: Check out ${{ matrix.branch }}
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+
+      # We have to use a workflow_dispatch here because we're using the matrix branch value.
+      # Calling a workflow using the `uses` syntax does not give us access to any context so
+      # we must use hardcoded tags/branches/SHAs.  This also means we need to manually monitor
+      # for when the workflow completes.
+      - name: Call CI workflow for ${{ matrix.branch }} branch
+        id: trigger-step
+        run: |
+          gh workflow run ${{ matrix.workflow_name }} --ref ${{ matrix.branch }}
+        env:
+          GH_TOKEN: ${{ secrets.FISHTOWN_BOT_PAT }}
+
+      # If you check for running workflows too fast, the one just submitted won't be there yet
+      - name: "Wait for it"
+        id: waiting
+        run: |
+          sleep 25s
+
+      - name: Get workflow run ID
+        id: workflow-id
+        run: |
+           table=$(gh run list --workflow=${{ matrix.workflow_name }} --branch=${{ matrix.branch }} --event=workflow_dispatch)
+           echo $table
+           id=$(echo "$table" | awk 'NR==1' | jq -Rr 'split("\t")[6]')
+           echo $id
+           echo "id=$id" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for run to complete
+        id: monitor-run
+        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08  # nick-fields/retry@v3
+        with:
+          timeout_minutes: 180
+          max_attempts: 3
+          command: gh run watch ${{ steps.workflow-id.outputs.id }} --interval 300 --exit-status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get slack message details for failed runs
+        if: ${{ always() && steps.monitor-run.outcome != 'success' }}
+        id: status-check
+        run: |
+          url=$(gh run view ${{ steps.workflow-id.outputs.id }} --json url -q ".url")
+          echo "workflow-url=$url" >> $GITHUB_OUTPUT
+          conclusion=$(gh run view ${{ steps.workflow-id.outputs.id }} --json conclusion -q ".conclusion")
+          echo "workflow-conclusion=$conclusion" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Post failure to core Slack
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        if: ${{ always() && steps.monitor-run.outcome != 'success' && (github.event.repository.name == 'dbt-core' || github.event.repository.name == 'dbt-common')}}
+        with:
+          status: ${{ job.status }}
+          notification_title: '${{ github.event.repository.name }} scheduled run of "${{ matrix.branch }}" branch not successful'
+          message_format: ':x: CI on branch "${{ matrix.branch }}" ${{ steps.status-check.outputs.workflow-conclusion }}'
+          footer: 'Linked failed CI run ${{ steps.status-check.outputs.workflow-url }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_CORE_ALERTS }}
+
+      - name: Post failure to adapter Slack
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2  # ravsamhq/notify-slack-action@v2
+        if: ${{ always() && steps.monitor-run.outcome != 'success' && github.event.repository.name != 'dbt-core' }}
+        with:
+          status: ${{ job.status }}
+          notification_title: '${{ github.event.repository.name }} scheduled run of "${{ matrix.branch }}" branch not successful'
+          message_format: ':x: CI on branch "${{ matrix.branch }}" ${{ steps.status-check.outputs.workflow-conclusion }}'
+          footer: 'Linked failed CI run ${{ steps.status-check.outputs.workflow-url }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_ADAPTER_ALERTS }}

@@ -1,0 +1,82 @@
+# **what?**
+# Mirrors GitHub Issue labels into Jira. Includes adding a new label
+# to an existing issue or removing a label as well
+#
+# Inputs:
+#   project_key: the key used to prefix issue id in Jira (i.e. "CT" for issue CT-123)
+#   JIRA_BASE_URL: your URL to Jira (i.e. https://abc.atlassian.net)
+#   JIRA_USER_EMAIL: user email to log into Jira under
+#   JIRA_API_TOKEN: user's API token
+
+# **why?**
+# Jira issues needs to reflect the labels of their related GitHub Issues
+
+# **when?**
+# On labels being added or removed from GitHub Issues
+
+name: Jira Label Mirroring
+
+on:
+  workflow_call:
+    inputs:
+      project_key:
+        required: true
+        type: string
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+permissions:
+  issues: read
+
+jobs:
+  extract-id:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    if: startsWith(github.event.issue.title, format('[{0}-', ${{inputs.project_key}}))
+    outputs:
+      issueId: ${{ steps.extract.outputs.issueId }}
+    steps:
+      - name: Extract Jira issue ID from title
+        id: extract
+        env:
+          TITLE: "${{ github.event.issue.title }}"
+        run: |
+          echo $TITLE
+          issueId=$(echo -n $TITLE | awk '{print $1}' | awk -F'[][]' '{print $2}')
+          echo "issueId=${issueId}" >> $GITHUB_OUTPUT
+
+  edit-label:
+    timeout-minutes: 20
+    if: needs.extract-id.outputs.issueId != ''
+    runs-on: ubuntu-24.04
+    needs: extract-id
+    env:
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+    steps:
+      - name: "[DEBUG] - Print Job Inputs"
+        shell: bash
+        id: echo_inputs
+        run: |
+          echo "all variables defined as ouputs in previous jobs"
+          echo "Issue ID:            ${{ needs.extract-id.outputs.issueId }}"
+
+      - name: Setup Jira
+        uses: atlassian/gajira-cli@7b8487d76cd88bf5d50ba00c6cca6edff1ddd507  # atlassian/gajira-cli@v3
+
+      - name: Login
+        uses: atlassian/gajira-login@ca13f8850ea309cf44a6e4e0c49d9aa48ac3ca4c  # atlassian/gajira-login@v3
+
+      - name: Add label
+        if: github.event.action == 'labeled'
+        run: jira labels add ${{ needs.extract-id.outputs.issueId }} ${{ github.event.label.name }}
+
+      - name: Remove label
+        if: github.event.action == 'unlabeled'
+        run: jira labels remove ${{ needs.extract-id.outputs.issueId }} ${{ github.event.label.name }}

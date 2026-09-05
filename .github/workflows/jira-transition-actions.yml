@@ -1,0 +1,37 @@
+# **what?**
+# Transition a Jira issue to a new state
+# Only supports these GitHub Issue transitions:
+#   closed, deleted, reopened
+
+# **why?**
+# Jira needs to be kept up-to-date
+
+# **when?**
+# On issue closing, deletion, reopened
+
+name: Jira Issue Transition
+
+on:
+  issues:
+    types: [closed, deleted, reopened]
+  workflow_call:
+    secrets:
+      JIRA_BASE_URL:
+        required: true
+      JIRA_USER_EMAIL:
+        required: true
+      JIRA_API_TOKEN:
+        required: true
+
+# no special access is needed
+permissions: read-all
+
+jobs:
+  call-transition-action:
+    uses: dbt-labs/actions/.github/workflows/jira-transition.yml@ed19ee39fd410f9ebc3ef202a8c80879a3328697 # main
+    with:
+      project_key: "CT"
+    secrets:
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

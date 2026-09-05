@@ -1,0 +1,101 @@
+# **what?**
+# Launch all dbt installations tests from one workflow
+
+# **why?**
+# Simplify the process of launching and tracking of installations tests
+
+# **when?**
+# This workflow will run on a schedule every night and also can be
+# manually invoked.
+
+name: dbt Installation Tests
+
+permissions:
+  contents: read # required for slack-post-notification workflow
+  packages: read # required to fetch tags for a container
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-installation-method:
+        description: "Choose installation method(s) to test"
+        required: true
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "pip"
+          - "docker"
+          - "source"
+
+  # run this once per night to ensure no regressions
+jobs:
+
+  dbt-installation-pip:
+    if: >-
+      github.event_name == 'schedule'
+      || (inputs.test-installation-method == 'all'
+      || inputs.test-installation-method == 'pip')
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          [
+            "dbt-postgres",
+            "dbt-redshift",
+            "dbt-snowflake",
+            "dbt-bigquery",
+            "dbt-spark",
+          ]
+
+    uses: ./.github/workflows/test-dbt-installation-pip.yml
+    with:
+      package_name: ${{ matrix.package }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_ADAPTER_ALERTS }}
+
+  dbt-installation-docker:
+    if: >-
+      github.event_name == 'schedule'
+      || (inputs.test-installation-method == 'all'
+      || inputs.test-installation-method == 'docker')
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          [
+            "dbt-postgres",
+            "dbt-redshift",
+            "dbt-snowflake",
+            "dbt-bigquery",
+            "dbt-spark",
+          ]
+
+    uses: ./.github/workflows/test-dbt-installation-docker.yml
+    with:
+      package_name: ${{ matrix.package }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_ADAPTER_ALERTS }}
+
+  dbt-installation-source:
+    if: >-
+      github.event_name == 'schedule'
+      || (inputs.test-installation-method == 'all'
+      || inputs.test-installation-method == 'source')
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          [
+            "dbt-core",
+            "dbt-redshift",
+            "dbt-snowflake",
+            "dbt-bigquery",
+            "dbt-spark",
+          ]
+
+    uses: ./.github/workflows/test-dbt-installation-source.yml
+    with:
+      package_name: ${{ matrix.package }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_ADAPTER_ALERTS }}
