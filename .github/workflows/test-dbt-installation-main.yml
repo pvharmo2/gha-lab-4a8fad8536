@@ -15,20 +15,9 @@ permissions:
   packages: read # required to fetch tags for a container
 
 on:
+  # workflow_dispatch and schedule triggers removed for the research lab snapshot (noise reduction)
   workflow_dispatch:
-    inputs:
-      test-installation-method:
-        description: "Choose installation method(s) to test"
-        required: true
-        type: choice
-        default: "all"
-        options:
-          - "all"
-          - "pip"
-          - "docker"
-          - "source"
 
-  # run this once per night to ensure no regressions
 jobs:
 
   dbt-installation-pip:

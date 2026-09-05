@@ -11,8 +11,7 @@
 name: Jira Issue Creation
 
 on:
-  issues:
-    types: [opened, labeled]
+  # issues trigger removed for the research lab snapshot (noise reduction)
   workflow_call:
     secrets:
       JIRA_BASE_URL:

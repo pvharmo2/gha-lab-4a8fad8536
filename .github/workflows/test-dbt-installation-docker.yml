@@ -16,12 +16,7 @@
 name: dbt Installation - Docker Integration Tests
 
 on:
-  workflow_dispatch:
-    inputs:
-      package_name:
-        description: "Package name to test (i.e. dbt-postgres)"
-        required: true
-        type: string
+  # workflow_dispatch trigger removed for the research lab snapshot (noise reduction)
   workflow_call:
     inputs:
       package_name:
