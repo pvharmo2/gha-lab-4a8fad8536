@@ -47,9 +47,9 @@ Actions and workflows should be self documented.  See individual actions for mor
     - [Release Branch Tests](.github/workflows/release-branch-tests.yml)
 - Generic Shared Workflows
     - [Label Swapping](.github/workflows/swap-labels.yml)
-    - [Open Issue in Another repo](.github/workflows/open-issue-in-repo.yml )
-    - [Scheduled Repository Cleanup After Releases](.github/workflows/repository-cleanup.yml )
-    - [Stale Bot Matrix](.github/workflows/stale-bot-matrix.yml )
+    - [Open Issue in Another repo](.github/workflows/open-issue-in-repo.yml)
+    - [Scheduled Repository Cleanup After Releases](.github/workflows/repository-cleanup.yml)
+    - [Stale Bot Matrix](.github/workflows/stale-bot-matrix.yml)
 
 - Jira Issue Syncing - used by dbt-metrics
     - .github/workflows/core-triage.yml
